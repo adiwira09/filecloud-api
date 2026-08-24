@@ -21,15 +21,23 @@ def verify_access(
         )
     return header_key
 
+def get_client_ip(request: Request) -> str:
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    if cf_ip:
+        return cf_ip.strip()
+
+    return request.client.host or "127.0.0.1"
+
 async def rate_limit_auth_middleware(request: Request, call_next):
     if request.url.path.endswith("/storage"):
-        client_ip = request.client.host
+        client_ip = get_client_ip(request)
         now = time.time()
         
         record = FAILED_ATTEMPTS.get(client_ip, {"count": 0, "blocked_until": 0})
         
         if now < record["blocked_until"]:
             remaining = int(record["blocked_until"] - now)
+
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={
@@ -41,11 +49,10 @@ async def rate_limit_auth_middleware(request: Request, call_next):
     response = await call_next(request)
 
     if request.url.path.endswith("/storage"):
-        client_ip = request.client.host
+        client_ip = get_client_ip(request)
         now = time.time()
-        is_check_only = request.headers.get("X-Check-Only") == "true"
         
-        if response.status_code == 401 and not is_check_only:
+        if response.status_code == 401:
             record = FAILED_ATTEMPTS.get(client_ip, {"count": 0, "blocked_until": 0})
             record["count"] += 1
             
@@ -54,6 +61,7 @@ async def rate_limit_auth_middleware(request: Request, call_next):
                 record["count"] = 0
             
             FAILED_ATTEMPTS[client_ip] = record
+            
         elif response.status_code == 200:
             FAILED_ATTEMPTS.pop(client_ip, None)
 

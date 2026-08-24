@@ -2,7 +2,7 @@ import io
 import os
 import mimetypes
 from typing import List, Optional
-from PIL import Image
+from PIL import Image, ImageOps
 
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Response
 from fastapi.responses import FileResponse
@@ -125,6 +125,7 @@ def preview_file(
     if size == "thumb" and ext in {"jpg", "jpeg", "png", "webp"}:
         try:
             with Image.open(item.file_path) as img:
+                img = ImageOps.exif_transpose(img)
                 img.thumbnail((300, 300))
                 buffer = io.BytesIO()
                 
