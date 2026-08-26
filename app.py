@@ -25,6 +25,7 @@ app.add_middleware(
 app.middleware("http")(rate_limit_auth_middleware)
 
 app.include_router(files.router, prefix="/api", tags=["Files"])
+app.include_router(files.public_router, prefix="/api", tags=["Files"])
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
 app.include_router(folders.router, prefix="/api", tags=["Folders"])
 

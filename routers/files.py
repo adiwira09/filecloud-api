@@ -21,9 +21,10 @@ from services.storage import format_size
 from services.file_service import delete_item, remove_physical_files
 
 router = APIRouter(dependencies=[Depends(verify_access)])
+public_router = APIRouter()
 
 _download_tokens: dict = {}
-_TOKEN_TTL = 60 # 60 detik
+_TOKEN_TTL = 30 # 30 detik
 
 def _purge_expired_tokens():
     now = time.time()
@@ -79,8 +80,6 @@ def get_files(
 @router.post("/download-token/{item_id}")
 def create_download_token(
     item_id: int, 
-    request: Request, 
-    response: Response, 
     db: Session = Depends(get_db)
 ):
     item = db.query(models.Item).filter(models.Item.id == item_id).first()
@@ -93,17 +92,6 @@ def create_download_token(
 
     _purge_expired_tokens()
 
-    api_key = request.headers.get("X-API-Key")
-    if api_key:
-        response.set_cookie(
-            key="dl_auth",
-            value=api_key,
-            max_age=_TOKEN_TTL,
-            httponly=True,
-            samesite="lax",
-            path="/api/download"
-        )
-
     token = secrets.token_urlsafe(32)
     _download_tokens[token] = {
         "item_id": item_id,
@@ -111,7 +99,7 @@ def create_download_token(
     }
     return {"download_token": token}
 
-@router.get("/download/{download_token}")
+@public_router.get("/download/{download_token}")
 def download_file(download_token: str, db: Session = Depends(get_db)):
     _purge_expired_tokens()
 
