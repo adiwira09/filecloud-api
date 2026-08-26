@@ -2,7 +2,7 @@ import time
 import secrets
 from typing import Optional
 from cachetools import TTLCache
-from fastapi import Security, HTTPException, status, Request
+from fastapi import Security, HTTPException, status, Request, Cookie
 from fastapi.security import APIKeyHeader
 from fastapi.responses import JSONResponse
 
@@ -10,16 +10,20 @@ from core.config import AUTH_TOKEN
 
 FAILED_ATTEMPTS = TTLCache(maxsize=10_000, ttl=300)
 
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 def verify_access(
-    header_key: Optional[str] = Security(APIKeyHeader(name="X-API-Key", auto_error=False))
-):
-    if not header_key or not AUTH_TOKEN or not secrets.compare_digest(header_key, AUTH_TOKEN):
+    header_key: Optional[str] = Security(api_key_header),
+    cookie_key: Optional[str] = Cookie(None, alias="dl_auth")
+) -> str:
+    token = header_key or cookie_key
+
+    if not token or not AUTH_TOKEN or not secrets.compare_digest(token, AUTH_TOKEN):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token akses tidak valid",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Token akses tidak valid"
         )
-    return header_key
+
+    return token
 
 def get_client_ip(request: Request) -> str:
     cf_ip = request.headers.get("CF-Connecting-IP")

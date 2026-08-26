@@ -1,10 +1,12 @@
 import io
 import os
+import secrets
+import time
 import mimetypes
 from typing import List, Optional
 from PIL import Image, ImageOps
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Response, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -19,6 +21,15 @@ from services.storage import format_size
 from services.file_service import delete_item, remove_physical_files
 
 router = APIRouter(dependencies=[Depends(verify_access)])
+
+_download_tokens: dict = {}
+_TOKEN_TTL = 60 # 60 detik
+
+def _purge_expired_tokens():
+    now = time.time()
+    expired = [k for k, v in _download_tokens.items() if v["expires_at"] < now]
+    for k in expired:
+        _download_tokens.pop(k, None)
 
 @router.get("/files", response_model=List[ItemResponse])
 def get_files(
@@ -65,8 +76,13 @@ def get_files(
         })
     return result
 
-@router.get("/download/{item_id}")
-def download_file(item_id: int, db: Session = Depends(get_db)):
+@router.post("/download-token/{item_id}")
+def create_download_token(
+    item_id: int, 
+    request: Request, 
+    response: Response, 
+    db: Session = Depends(get_db)
+):
     item = db.query(models.Item).filter(models.Item.id == item_id).first()
 
     if not item or item.is_folder:
@@ -74,7 +90,43 @@ def download_file(item_id: int, db: Session = Depends(get_db)):
 
     if not os.path.exists(item.file_path):
         raise HTTPException(status_code=404, detail="File fisik tidak ditemukan di server")
-    
+
+    _purge_expired_tokens()
+
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        response.set_cookie(
+            key="dl_auth",
+            value=api_key,
+            max_age=_TOKEN_TTL,
+            httponly=True,
+            samesite="lax",
+            path="/api/download"
+        )
+
+    token = secrets.token_urlsafe(32)
+    _download_tokens[token] = {
+        "item_id": item_id,
+        "expires_at": time.time() + _TOKEN_TTL,
+    }
+    return {"download_token": token}
+
+@router.get("/download/{download_token}")
+def download_file(download_token: str, db: Session = Depends(get_db)):
+    _purge_expired_tokens()
+
+    entry = _download_tokens.pop(download_token, None)
+    if not entry or entry["expires_at"] < time.time():
+        raise HTTPException(status_code=410, detail="Link download tidak valid atau sudah kadaluarsa")
+
+    item = db.query(models.Item).filter(models.Item.id == entry["item_id"]).first()
+
+    if not item or item.is_folder:
+        raise HTTPException(status_code=404, detail="File tidak ditemukan")
+
+    if not os.path.exists(item.file_path):
+        raise HTTPException(status_code=404, detail="File fisik tidak ditemukan di server")
+
     return FileResponse(path=item.file_path, filename=item.name)
 
 @router.delete("/files/{item_id}", response_model=MessageResponse)
