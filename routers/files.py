@@ -173,7 +173,11 @@ def preview_file(
                 img.save(buffer, format=fmt, quality=75)
                 buffer.seek(0)
                 
-                return Response(content=buffer.getvalue(), media_type=f"image/{ext}")
+                return Response(
+                    content=buffer.getvalue(), 
+                    media_type=f"image/{ext}",
+                    headers={"Cache-Control": "private, max-age=86400"}
+                )
         except Exception:
             pass
 
@@ -183,7 +187,10 @@ def preview_file(
     return FileResponse(
         path=item.file_path,
         media_type=mime_type or "application/octet-stream",
-        headers={"Content-Disposition": f'{disposition}; filename="{item.name}"'}
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{item.name}"',
+            "Cache-Control": "private, max-age=86400"
+        }
     )
 
 @router.get("/storage", response_model=StorageStatusResponse)
