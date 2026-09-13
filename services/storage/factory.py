@@ -10,17 +10,16 @@ from core.config import (
 )
 
 from services.storage.base import StorageService
-from services.storage.local import LocalStorage
-from services.storage.s3 import S3StorageService
-from services.storage.gcs import GCSStorageService
 
 def get_storage_service() -> StorageService:
     provider = STORAGE_PROVIDER.lower()
 
     if provider == "local":
+        from services.storage.local import LocalStorage
         return LocalStorage(base_path=LOCAL_STORAGE_PATH)
 
     if provider == "s3":
+        from services.storage.s3 import S3StorageService
         return S3StorageService(
             endpoint_url=S3_ENDPOINT_URL,
             region_name=S3_REGION_NAME,
@@ -30,6 +29,7 @@ def get_storage_service() -> StorageService:
         )
     
     if provider == "gcs":
+        from services.storage.gcs import GCSStorageService
         return GCSStorageService(
             bucket_name=GCS_BUCKET_NAME
         )
