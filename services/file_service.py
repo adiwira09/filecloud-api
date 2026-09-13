@@ -1,33 +1,23 @@
-import os
 from sqlalchemy.orm import Session, aliased
+from sqlalchemy import func
+
+from fastapi import HTTPException, status
+
 from db import models
+from core.config import STORAGE_LIMIT_GB
 
-def get_file_type(filename: str) -> str:
-    ext = filename.split(".")[-1].lower() if "." in filename else ""
-    if ext in ["pdf"]:
-        return "pdf"
-    elif ext in ["doc", "docx"]:
-        return "doc"
-    elif ext in ["txt"]:
-        return "text"
-    elif ext in ["jpg", "jpeg", "png", "gif", "webp"]:
-        return "image"
-    elif ext in ["ppt", "pptx"]:
-        return "ppt"
-    elif ext in ["mp4", "webm", "mkv", "avi"]:
-        return "video"
-    elif ext in ["mp3", "wav", "ogg", "flac"]:
-        return "audio"
-    return "other"
+from services.storage.base import StorageService
 
-def remove_physical_files(file_paths: list[str]):
-    for path in file_paths:
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
+def check_storage_quota(db: Session, incoming_bytes: int):
+    total_limit_bytes = STORAGE_LIMIT_GB * 1024 * 1024 * 1024
+    used_bytes = db.query(func.sum(models.Item.size_bytes)).filter(models.Item.is_folder == False).scalar() or 0
+    
+    if (used_bytes + incoming_bytes) > total_limit_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Upload ditolak: Kapasitas penyimpanan penuh. Batas kuota adalah {STORAGE_LIMIT_GB} GB."
+        )
+    
 def delete_item(item_ids: list[int], db: Session) -> tuple[int, list[str]]:
     if not item_ids:
         return 0, []
@@ -48,13 +38,30 @@ def delete_item(item_ids: list[int], db: Session) -> tuple[int, list[str]]:
         return 0, []
 
     files = (
-        db.query(models.Item.file_path)
+        db.query(models.Item)
         .filter(models.Item.id.in_(all_ids), models.Item.is_folder == False)
         .all()
     )
-    file_paths = [file_row.file_path for file_row in files if file_row.file_path]
 
-    deleted_count = db.query(models.Item).filter(models.Item.id.in_(all_ids)).delete(synchronize_session=False)
+    object_keys = [item.object_key for item in files if item.object_key]
+
+    # hapus metadata database
+    deleted_count = (
+        db.query(models.Item)
+        .filter(models.Item.id.in_(all_ids))
+        .delete(synchronize_session=False)
+    )
     db.commit()
 
-    return deleted_count, file_paths
+    return deleted_count, object_keys
+
+def delete_storage_objects(
+    storage: StorageService,
+    object_keys: list[str]
+):
+    for object_key in object_keys:
+        try:
+            storage.delete(object_key)
+            print(f"Berhasil menghapus file di storage: {object_key}")
+        except Exception as e:
+            print(f"Gagal menghapus file di storage: {object_key} | {type(e).__name__}: {e}")

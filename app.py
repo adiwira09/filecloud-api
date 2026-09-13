@@ -3,14 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from core.config import CORS_ORIGINS, FRONTEND_DIST_DIR, UPLOAD_DIR, CHUNK_DIR
+from core.config import CORS_ORIGINS, FRONTEND_DIST_DIR, CHUNK_DIR
 from core.security import rate_limit_auth_middleware
 from db.database import engine, Base
 from routers import files, upload, folders
 from schemas.common import MessageResponse
 
 Base.metadata.create_all(bind=engine)
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(CHUNK_DIR, exist_ok=True)
 
 app = FastAPI(title="FileCloud API")

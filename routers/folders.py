@@ -21,7 +21,6 @@ def create_folder(
         is_folder=True,
         file_type="folder",
         size_bytes=0,
-        file_path=None,
         parent_id=parent_id
     )
     db.add(new_folder)

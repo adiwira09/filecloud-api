@@ -5,3 +5,5 @@ python-multipart
 python-dotenv
 Pillow
 cachetools
+boto3
+google-cloud-storage

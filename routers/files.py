@@ -11,14 +11,21 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+import utils
+
 from db.database import get_db
 from db import models
+
 from schemas.file import ItemResponse, BulkDeleteRequest
 from schemas.common import MessageResponse, StorageStatusResponse
+
 from core.security import verify_access
 from core.config import ALLOWED_INLINE_EXTENSIONS, STORAGE_LIMIT_GB
-from services.storage import format_size
-from services.file_service import delete_item, remove_physical_files
+
+from services.file_service import delete_item, delete_storage_objects
+from services.storage.base import StorageService
+from services.storage.factory import get_storage_service
+from services.storage.local import LocalStorage
 
 router = APIRouter(dependencies=[Depends(verify_access)])
 public_router = APIRouter()
@@ -63,7 +70,7 @@ def get_files(
             count = counts_dict.get(item.id, 0)
             size_str = f"{count} items"
         else:
-            size_str = format_size(item.size_bytes)
+            size_str = utils.format_size(item.size_bytes)
             
         result.append({
             "id": item.id,
@@ -80,27 +87,66 @@ def get_files(
 @router.post("/download-token/{item_id}")
 def create_download_token(
     item_id: int, 
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service)
 ):
     item = db.query(models.Item).filter(models.Item.id == item_id).first()
 
     if not item or item.is_folder:
         raise HTTPException(status_code=404, detail="File tidak ditemukan")
 
-    if not os.path.exists(item.file_path):
-        raise HTTPException(status_code=404, detail="File fisik tidak ditemukan di server")
+    if not item.object_key:
+        raise HTTPException(status_code=404, detail="Object key file tidak ditemukan")
 
-    _purge_expired_tokens()
+    # local storage
+    if isinstance(storage, LocalStorage):
+        try:
+            file_path = storage.get_file_path(item.object_key)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Object key tidak valid")
 
-    token = secrets.token_urlsafe(32)
-    _download_tokens[token] = {
-        "item_id": item_id,
-        "expires_at": time.time() + _TOKEN_TTL,
-    }
-    return {"download_token": token}
+        if not os.path.isfile(file_path):
+            raise HTTPException(status_code=404, detail="File tidak ditemukan di storage")
+
+        _purge_expired_tokens()
+        token = secrets.token_urlsafe(32)
+        _download_tokens[token] = {
+            "item_id": item.id,
+            "expires_at": time.time() + _TOKEN_TTL
+        }
+
+        return {
+            "download_token": token,
+        }
+
+    # object storage
+    try:
+        if not storage.exists(item.object_key):
+            raise HTTPException(status_code=404, detail="File tidak ditemukan di storage")
+
+        download_url = storage.get_download_url(
+            item.object_key, 
+            expiration=_TOKEN_TTL,
+            download=True,
+            filename=item.name
+        )
+
+        return {
+            "download_url": download_url
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error generating download URL: {str(e)}")
 
 @public_router.get("/download/{download_token}")
-def download_file(download_token: str, db: Session = Depends(get_db)):
+def download_file(
+    download_token: str, 
+    db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service)
+):
     _purge_expired_tokens()
 
     entry = _download_tokens.pop(download_token, None)
@@ -112,23 +158,41 @@ def download_file(download_token: str, db: Session = Depends(get_db)):
     if not item or item.is_folder:
         raise HTTPException(status_code=404, detail="File tidak ditemukan")
 
-    if not os.path.exists(item.file_path):
+    if not item.object_key:
+        raise HTTPException(status_code=404, detail="Object key file tidak ditemukan")
+
+    if not isinstance(storage, LocalStorage):
+        raise HTTPException(status_code=400, detail="Endpoint ini hanya digunakan untuk local storage")
+
+    try:
+        file_path = storage.get_file_path(item.object_key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Object key tidak valid")
+        
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File fisik tidak ditemukan di server")
 
-    return FileResponse(path=item.file_path, filename=item.name)
+    mime_type, _ = mimetypes.guess_type(item.name)
+
+    return FileResponse(
+        path=file_path,
+        filename=item.name,
+        media_type=mime_type or "application/octet-stream"
+    )
 
 @router.delete("/files/{item_id}", response_model=MessageResponse)
 def delete_file(
     item_id: int, 
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service)
 ):
-    deleted_count, file_paths = delete_item([item_id], db)
+    deleted_count, object_keys = delete_item([item_id], db)
     if deleted_count == 0:
         raise HTTPException(status_code=404, detail="Item tidak ditemukan")
 
-    if file_paths:
-        background_tasks.add_task(remove_physical_files, file_paths)
+    if object_keys:
+        background_tasks.add_task(delete_storage_objects, storage, object_keys)
 
     return MessageResponse(message=f"{deleted_count} item berhasil dihapus")
 
@@ -136,14 +200,15 @@ def delete_file(
 def bulk_delete_files(
     payload: BulkDeleteRequest, 
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service)
 ):
     if not payload.item_ids:
         raise HTTPException(status_code=400, detail="Tidak ada item yang dipilih untuk dihapus")
 
-    deleted_count, file_paths = delete_item(payload.item_ids, db)
-    if file_paths:
-        background_tasks.add_task(remove_physical_files, file_paths)
+    deleted_count, object_keys = delete_item(payload.item_ids, db)
+    if object_keys:
+        background_tasks.add_task(delete_storage_objects, storage, object_keys)
         
     return MessageResponse(message=f"{deleted_count} item berhasil dihapus")
 
@@ -151,48 +216,88 @@ def bulk_delete_files(
 def preview_file(
     item_id: int, 
     size: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage_service)
 ):
     item = db.query(models.Item).filter(models.Item.id == item_id).first()
 
     if not item or item.is_folder:
         raise HTTPException(status_code=404, detail="File tidak ditemukan")
 
-    if not item.file_path or not os.path.exists(item.file_path):
-        raise HTTPException(status_code=404, detail="File fisik tidak ditemukan di server")
+    if not item.object_key:
+        raise HTTPException(status_code=404, detail="Object key file tidak ditemukan")
 
     ext = item.name.split(".")[-1].lower() if "." in item.name else ""
     if size == "thumb" and ext in {"jpg", "jpeg", "png", "webp"}:
         try:
-            with Image.open(item.file_path) as img:
-                img = ImageOps.exif_transpose(img)
-                img.thumbnail((300, 300))
-                buffer = io.BytesIO()
+            if not storage.exists(item.object_key):
+                raise HTTPException(status_code=404, detail="File tidak ditemukan di storage")
+
+            with storage.download(item.object_key) as file_stream:
+                with Image.open(file_stream) as img:
+                    img = ImageOps.exif_transpose(img)
+                    img.thumbnail((300, 300))
+                    buffer = io.BytesIO()
                 
-                fmt = "JPEG" if ext in ["jpg", "jpeg"] else ext.upper()
-                img.save(buffer, format=fmt, quality=75)
-                buffer.seek(0)
+                    fmt = "JPEG" if ext in ["jpg", "jpeg"] else ext.upper()
+                    if fmt == "JPEG":
+                        if img.mode in {"RGBA", "LA", "P"}:
+                            img = img.convert("RGB")
+                            
+                    img.save(buffer, format=fmt, quality=75)
+                    buffer.seek(0)
                 
-                return Response(
-                    content=buffer.getvalue(), 
-                    media_type=f"image/{ext}",
-                    headers={"Cache-Control": "private, max-age=86400"}
-                )
+                    return Response(
+                        content=buffer.getvalue(), 
+                        media_type="image/jpeg" if fmt == "JPEG" else f"image/{ext}",
+                        headers={"Cache-Control": "private, max-age=86400"}
+                    )
+        except HTTPException:
+            raise
+
         except Exception:
-            pass
+            raise HTTPException(status_code=500, detail="Tidak dapat membuat preview untuk file ini")
+
+    if not isinstance(storage, LocalStorage):
+        try:
+            if not storage.exists(item.object_key):
+                raise HTTPException(status_code=404, detail="File tidak ditemukan di storage")
+
+            preview_url = storage.get_download_url(item.object_key, expiration=_TOKEN_TTL)
+            
+            return {
+                "preview_url": preview_url,
+                "name": item.name,
+                "file_type": item.file_type,
+                "mime_type": mimetypes.guess_type(item.name)[0] or "application/octet-stream"
+            }
+
+        except HTTPException:
+            raise
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Gagal membuat preview URL: {str(e)}")
+
+    try:
+        file_path = storage.get_file_path(item.object_key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Object key tidak valid")
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="File fisik tidak ditemukan di server")
 
     disposition = "inline" if ext in ALLOWED_INLINE_EXTENSIONS else "attachment"
     mime_type, _ = mimetypes.guess_type(item.name)
 
     return FileResponse(
-        path=item.file_path,
+        path=file_path,
         media_type=mime_type or "application/octet-stream",
         headers={
             "Content-Disposition": f'{disposition}; filename="{item.name}"',
             "Cache-Control": "private, max-age=86400"
         }
     )
-
+        
 @router.get("/storage", response_model=StorageStatusResponse)
 def get_storage_status(db: Session = Depends(get_db)):
     total_limit_bytes = STORAGE_LIMIT_GB * 1024 * 1024 * 1024
@@ -201,7 +306,7 @@ def get_storage_status(db: Session = Depends(get_db)):
 
     return StorageStatusResponse(
         used_bytes=used_bytes,
-        used_formatted=format_size(used_bytes),
+        used_formatted=utils.format_size(used_bytes),
         total_formatted=f"{STORAGE_LIMIT_GB} GB",
         percentage=percentage
     )
