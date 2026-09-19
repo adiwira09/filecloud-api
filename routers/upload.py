@@ -2,6 +2,7 @@ import os
 import uuid
 import datetime
 import mimetypes
+import aiofiles
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -69,7 +70,7 @@ async def local_upload_direct(
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with open(file_path, "wb") as buffer:
+        async with aiofiles.open(file_path, "wb") as buffer:
             async for chunk in request.stream():
                 buffer.write(chunk)
     except Exception as e:
