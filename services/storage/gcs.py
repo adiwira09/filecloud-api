@@ -50,6 +50,21 @@ class GCSStorageService(StorageService):
         url = blob.generate_signed_url(version='v4', expiration=timedelta(seconds=expiration), method='GET', response_disposition=response_disposition)
         return url
 
+    def get_upload_url(
+            self, 
+            object_key: str, 
+            expiration: int = 3600, 
+            content_type: str | None = None
+    ) -> str:
+        blob = self.bucket.blob(object_key)
+        url = blob.generate_signed_url(
+            version='v4', 
+            expiration=timedelta(seconds=expiration), 
+            method='PUT', 
+            content_type=content_type
+        )
+        return url
+    
     def download(self, object_key: str) -> BytesIO:
         blob = self.bucket.blob(object_key)
 

@@ -19,5 +19,9 @@ class StorageService(ABC):
         pass
 
     @abstractmethod
+    def get_upload_url(self, object_key: str, expiration: int = 3600, content_type: str | None = None) -> str:
+        pass
+
+    @abstractmethod
     def download(self, object_key: str) -> BinaryIO:
         pass

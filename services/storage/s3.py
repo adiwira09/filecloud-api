@@ -83,6 +83,28 @@ class S3StorageService(StorageService):
         
         return response
 
+    def get_upload_url(
+        self,
+        object_key: str,
+        expiration: int = 3600,
+        content_type: str | None = None
+    ) -> str:
+        params = {
+            "Bucket": self.bucket_name,
+            "Key": object_key
+        }
+
+        try:
+            response = self.client.generate_presigned_url(
+                'put_object',
+                Params=params,
+                ExpiresIn=expiration
+            )
+        except ClientError as e:
+            raise Exception(f"Error generating upload URL: {e}")
+        
+        return response
+    
     def download(self, object_key: str) -> BytesIO:
         response = self.client.get_object(
             Bucket=self.bucket_name,

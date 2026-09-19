@@ -67,3 +67,11 @@ class LocalStorage(StorageService):
 
         with open(file_path, "rb") as file:
             return BytesIO(file.read())
+
+    def get_upload_url(
+        self,
+        object_key: str,
+        expiration: int = 3600,
+        content_type: str | None = None
+    ) -> str:
+        return f"/api/upload/local-direct?object_key={object_key}"
