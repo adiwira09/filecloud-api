@@ -7,3 +7,4 @@ Pillow
 cachetools
 boto3
 google-cloud-storage
+aiofiles
