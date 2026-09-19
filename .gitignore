@@ -1,5 +1,6 @@
 __pycache__
 .env
+.env.development
 env
 venv
 temp_chunks
