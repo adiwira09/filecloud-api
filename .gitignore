@@ -5,4 +5,4 @@ env
 venv
 temp_chunks
 uploads
-filecloud.db
+*.db
