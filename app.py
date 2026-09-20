@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from core.config import CORS_ORIGINS, FRONTEND_DIST_DIR, CHUNK_DIR
 from core.security import rate_limit_auth_middleware
 from db.database import engine, Base
-from routers import files, upload, folders
+from routers import files, upload, folders, auth
 from schemas.common import MessageResponse
 
 Base.metadata.create_all(bind=engine)
@@ -27,6 +27,7 @@ app.include_router(files.router, prefix="/api", tags=["Files"])
 app.include_router(files.public_router, prefix="/api", tags=["Files"])
 app.include_router(upload.router, prefix="/api", tags=["Upload"])
 app.include_router(folders.router, prefix="/api", tags=["Folders"])
+app.include_router(auth.router, prefix="/api", tags=["Auth"])
 
 @app.get("/status-check", response_model=MessageResponse, tags=["Health"])
 def root():
